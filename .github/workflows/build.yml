@@ -65,13 +65,14 @@ jobs:
           Copy-Item "singbox_extracted/sing-box-$ver-windows-amd64/sing-box.exe" "src-tauri/binaries/sing-box-x86_64-pc-windows-msvc.exe"
           Get-ChildItem src-tauri/binaries
 
-      - name: Download sing-box per-arch (macOS)
+      - name: Download sing-box per-arch + fuse (macOS)
         if: matrix.platform == 'macos-latest'
         shell: bash
         run: |
-          # `--target universal-apple-darwin` builds the app for each arch
-          # separately and lipos them; it expects per-arch sidecars, not a
-          # pre-fused universal binary.
+          # --target universal-apple-darwin needs three sidecar files:
+          #   sing-box-x86_64-apple-darwin   (used during cargo build of x86_64)
+          #   sing-box-aarch64-apple-darwin  (used during cargo build of aarch64)
+          #   sing-box-universal-apple-darwin (used at bundle time)
           ver="${{ env.SINGBOX_VERSION }}"
           curl -L -o singbox-amd64.tar.gz "https://github.com/SagerNet/sing-box/releases/download/v${ver}/sing-box-${ver}-darwin-amd64.tar.gz"
           curl -L -o singbox-arm64.tar.gz "https://github.com/SagerNet/sing-box/releases/download/v${ver}/sing-box-${ver}-darwin-arm64.tar.gz"
@@ -80,6 +81,10 @@ jobs:
           mkdir -p src-tauri/binaries
           cp "sing-box-${ver}-darwin-amd64/sing-box" "src-tauri/binaries/sing-box-x86_64-apple-darwin"
           cp "sing-box-${ver}-darwin-arm64/sing-box" "src-tauri/binaries/sing-box-aarch64-apple-darwin"
+          lipo -create \
+            "src-tauri/binaries/sing-box-x86_64-apple-darwin" \
+            "src-tauri/binaries/sing-box-aarch64-apple-darwin" \
+            -output "src-tauri/binaries/sing-box-universal-apple-darwin"
           chmod +x src-tauri/binaries/sing-box-*
           ls -la src-tauri/binaries
 
