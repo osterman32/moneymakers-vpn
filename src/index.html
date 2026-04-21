@@ -12,14 +12,30 @@
         <h1>MoneyMakers VPN</h1>
       </header>
 
-      <section id="needs-download" class="view hidden">
+      <section id="paste-key" class="view hidden">
         <p class="hint">
-          This app isn&apos;t tied to an account yet. Head to
-          <b>moneymakers.inc</b> in your browser, create an account on the
-          <code>~/vpn</code> tab, and download <i>your</i> personal file.
+          Paste your sign-in key to finish setup. Get it from
+          <b>moneymakers.inc</b> → <code>~/vpn</code> tab (after creating an
+          account).
         </p>
-        <a id="open-site-btn" href="https://moneymakers.inc/" target="_blank" rel="noopener noreferrer" class="primary big">
-          Open moneymakers.inc
+        <label>
+          <span class="label">sign-in key</span>
+          <input
+            id="key-input"
+            placeholder="paste here"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </label>
+        <button id="key-submit" class="primary big">Sign in</button>
+        <a
+          id="open-site-btn"
+          href="https://moneymakers.inc/"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="link-button"
+        >
+          don&apos;t have a key? open moneymakers.inc
         </a>
       </section>
 
@@ -32,6 +48,7 @@
           <select id="server-select"></select>
         </label>
         <button id="connect-btn" class="primary big">Connect</button>
+        <button id="signout-btn" class="link">sign out</button>
       </section>
 
       <div id="status" class="status"></div>

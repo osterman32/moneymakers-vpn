@@ -167,3 +167,18 @@ button:disabled {
   font-size: 10px;
   color: var(--dim);
 }
+
+.link-button {
+  display: block;
+  text-align: center;
+  color: var(--dim);
+  font-size: 11px;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  padding: 4px;
+  margin-top: 8px;
+}
+
+.link-button:hover {
+  color: var(--fg);
+}

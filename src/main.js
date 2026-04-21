@@ -1,6 +1,7 @@
 const { invoke } = window.__TAURI__.core;
 
 const BASE_URL = "https://moneymakers.inc";
+const TOKEN_KEY = "mm_vpn_token";
 
 function $(id) {
   return document.getElementById(id);
@@ -51,26 +52,55 @@ function renderMain(data) {
   $("connect-btn").disabled = false;
 }
 
-async function startup() {
-  const token = await invoke("get_embedded_token").catch(() => null);
-  if (!token) {
-    show("needs-download");
-    return;
-  }
+async function proceedWithToken(token) {
   setStatus("loading…");
   try {
     const data = await fetchServers(token);
+    localStorage.setItem(TOKEN_KEY, token);
     renderMain(data);
     pingServer(token);
     setStatus("");
+    return true;
   } catch (e) {
-    setStatus(
-      "couldn't reach the server or your access was revoked: " + e,
-      "error",
-    );
-    show("needs-download");
+    setStatus("couldn't sign in: " + e, "error");
+    return false;
   }
 }
+
+async function startup() {
+  // 1. filename-embedded token (portable exe path)
+  const embedded = await invoke("get_embedded_token").catch(() => null);
+  if (embedded) {
+    if (await proceedWithToken(embedded)) return;
+  }
+  // 2. previously-saved token (any prior successful sign-in)
+  const saved = localStorage.getItem(TOKEN_KEY);
+  if (saved) {
+    if (await proceedWithToken(saved)) return;
+    localStorage.removeItem(TOKEN_KEY);
+  }
+  // 3. manual paste fallback
+  show("paste-key");
+  setStatus("");
+}
+
+$("key-submit").addEventListener("click", async () => {
+  const raw = $("key-input").value.trim();
+  if (!raw) return setStatus("paste your sign-in key", "error");
+  await proceedWithToken(raw);
+});
+
+$("key-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") $("key-submit").click();
+});
+
+$("signout-btn").addEventListener("click", () => {
+  if (!confirm("sign out on this device?")) return;
+  localStorage.removeItem(TOKEN_KEY);
+  show("paste-key");
+  $("key-input").value = "";
+  setStatus("");
+});
 
 $("connect-btn").addEventListener("click", async () => {
   const id = parseInt($("server-select").value, 10);
