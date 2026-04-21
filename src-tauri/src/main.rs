@@ -108,27 +108,20 @@ fn parse_ss_url(url: &str) -> Result<(String, String, String, u16), String> {
     ))
 }
 
-fn build_singbox_config(ss_url: &str) -> Result<String, String> {
+fn build_singbox_config(ss_url: &str, log_path: &str) -> Result<String, String> {
     let (method, password, host, port) = parse_ss_url(ss_url)?;
     let cfg = serde_json::json!({
-        "log": { "level": "warn" },
-        "dns": {
-            "servers": [
-                { "tag": "remote", "address": "1.1.1.1", "detour": "proxy-out" },
-                { "tag": "local",  "address": "local" }
-            ],
-            "rules": [
-                { "outbound": ["any"], "server": "local" }
-            ],
-            "final": "remote"
+        "log": {
+            "level": "info",
+            "output": log_path,
+            "timestamp": true
         },
         "inbounds": [{
             "type": "mixed",
             "tag": "proxy-in",
             "listen": "127.0.0.1",
             "listen_port": 10808,
-            "sniff": true,
-            "sniff_override_destination": true
+            "sniff": true
         }],
         "outbounds": [
             {
@@ -143,8 +136,10 @@ fn build_singbox_config(ss_url: &str) -> Result<String, String> {
             { "type": "block",  "tag": "block" }
         ],
         "route": {
-            "final": "proxy-out",
-            "auto_detect_interface": true
+            "rules": [
+                { "inbound": ["proxy-in"], "outbound": "proxy-out" }
+            ],
+            "final": "proxy-out"
         }
     });
     serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())
@@ -164,10 +159,12 @@ async fn connect(
         }
     }
 
-    let config = build_singbox_config(&ss_url)?;
     let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
     let config_path = config_dir.join("singbox.json");
+    let log_path = config_dir.join("singbox.log");
+
+    let config = build_singbox_config(&ss_url, &log_path.to_string_lossy())?;
     fs::write(&config_path, &config).map_err(|e| e.to_string())?;
 
     let cmd = app
@@ -188,6 +185,21 @@ async fn connect(
 
     set_system_proxy(true).map_err(|e| format!("set proxy: {}", e))?;
     Ok(())
+}
+
+// Returns the last ~8KB of the sing-box log, for surfacing in the UI when
+// something seems broken. Path mirrors the one in `build_singbox_config`.
+#[tauri::command]
+async fn read_log(app: tauri::AppHandle) -> Result<String, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let log_path = config_dir.join("singbox.log");
+    let full = fs::read_to_string(&log_path).unwrap_or_else(|_| String::from("(no log yet)"));
+    const MAX: usize = 8 * 1024;
+    if full.len() <= MAX {
+        Ok(full)
+    } else {
+        Ok(format!("…\n{}", &full[full.len() - MAX..]))
+    }
 }
 
 #[tauri::command]
@@ -299,7 +311,8 @@ fn main() {
             fetch_servers,
             ping,
             connect,
-            disconnect
+            disconnect,
+            read_log
         ])
         .run(tauri::generate_context!())
         .expect("error while running MoneyMakers VPN");

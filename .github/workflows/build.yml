@@ -65,15 +65,20 @@ jobs:
           Copy-Item "singbox_extracted/sing-box-$ver-windows-amd64/sing-box.exe" "src-tauri/binaries/sing-box-x86_64-pc-windows-msvc.exe"
           Get-ChildItem src-tauri/binaries
 
-      - name: Download sing-box (macOS universal)
+      - name: Download + fuse sing-box (macOS universal)
         if: matrix.platform == 'macos-latest'
         shell: bash
         run: |
           ver="${{ env.SINGBOX_VERSION }}"
-          curl -L -o singbox.tar.gz "https://github.com/SagerNet/sing-box/releases/download/v${ver}/sing-box-${ver}-darwin-universal.tar.gz"
-          tar xzf singbox.tar.gz
+          curl -L -o singbox-amd64.tar.gz "https://github.com/SagerNet/sing-box/releases/download/v${ver}/sing-box-${ver}-darwin-amd64.tar.gz"
+          curl -L -o singbox-arm64.tar.gz "https://github.com/SagerNet/sing-box/releases/download/v${ver}/sing-box-${ver}-darwin-arm64.tar.gz"
+          tar xzf singbox-amd64.tar.gz
+          tar xzf singbox-arm64.tar.gz
           mkdir -p src-tauri/binaries
-          cp "sing-box-${ver}-darwin-universal/sing-box" "src-tauri/binaries/sing-box-universal-apple-darwin"
+          lipo -create \
+            "sing-box-${ver}-darwin-amd64/sing-box" \
+            "sing-box-${ver}-darwin-arm64/sing-box" \
+            -output "src-tauri/binaries/sing-box-universal-apple-darwin"
           chmod +x "src-tauri/binaries/sing-box-universal-apple-darwin"
           ls -la src-tauri/binaries
 

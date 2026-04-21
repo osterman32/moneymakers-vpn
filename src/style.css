@@ -182,3 +182,18 @@ button:disabled {
 .link-button:hover {
   color: var(--fg);
 }
+
+.log {
+  margin: 0;
+  padding: 8px;
+  font-size: 10px;
+  font-family: ui-monospace, monospace;
+  color: var(--dim);
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

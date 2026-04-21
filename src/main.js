@@ -109,6 +109,22 @@ $("signout-btn").addEventListener("click", async () => {
   setStatus("");
 });
 
+$("log-btn").addEventListener("click", async () => {
+  const out = $("log-output");
+  if (!out.classList.contains("hidden")) {
+    out.classList.add("hidden");
+    return;
+  }
+  try {
+    const text = await invoke("read_log");
+    out.textContent = text;
+    out.classList.remove("hidden");
+  } catch (e) {
+    out.textContent = "couldn't read log: " + e;
+    out.classList.remove("hidden");
+  }
+});
+
 $("connect-btn").addEventListener("click", async () => {
   if (connected) {
     setStatus("disconnecting…");
