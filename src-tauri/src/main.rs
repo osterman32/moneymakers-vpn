@@ -290,11 +290,73 @@ fn notify_proxy_change() {
     }
 }
 
+// macOS system proxy is per-network-service (Wi-Fi, Ethernet, …) and requires
+// root to change. We enumerate active services via `networksetup`, then drive
+// the updates through a single `osascript … with administrator privileges`
+// call — one Touch ID / password prompt instead of one per service.
 #[cfg(target_os = "macos")]
-fn set_system_proxy(_enable: bool) -> Result<(), String> {
-    // TODO: wire up `networksetup -setsocksfirewallproxy` via osascript with admin.
-    // For now, surface an error instead of silently connecting with no routing.
-    Err("mac system-proxy support ships in a later build".into())
+fn set_system_proxy(enable: bool) -> Result<(), String> {
+    use std::process::Command;
+
+    let listing = Command::new("networksetup")
+        .arg("-listallnetworkservices")
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !listing.status.success() {
+        return Err(format!(
+            "listallnetworkservices: {}",
+            String::from_utf8_lossy(&listing.stderr)
+        ));
+    }
+    let text = String::from_utf8_lossy(&listing.stdout);
+    // First line is a header; lines starting with '*' are disabled services.
+    let services: Vec<String> = text
+        .lines()
+        .skip(1)
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('*'))
+        .map(|l| l.to_string())
+        .collect();
+    if services.is_empty() {
+        return Err("no active network services".into());
+    }
+
+    let mut shell = String::new();
+    for svc in &services {
+        let safe = svc.replace('\\', "\\\\").replace('"', "\\\"");
+        if enable {
+            shell.push_str(&format!(
+                "/usr/sbin/networksetup -setsocksfirewallproxy \\\"{}\\\" 127.0.0.1 10808 && ",
+                safe
+            ));
+            shell.push_str(&format!(
+                "/usr/sbin/networksetup -setsocksfirewallproxystate \\\"{}\\\" on && ",
+                safe
+            ));
+        } else {
+            shell.push_str(&format!(
+                "/usr/sbin/networksetup -setsocksfirewallproxystate \\\"{}\\\" off && ",
+                safe
+            ));
+        }
+    }
+    shell.push_str("true");
+
+    let osa = format!(
+        "do shell script \"{}\" with administrator privileges",
+        shell
+    );
+    let out = Command::new("osascript")
+        .args(["-e", &osa])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(format!(
+            "networksetup via osascript: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
