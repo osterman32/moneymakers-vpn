@@ -22,17 +22,14 @@ struct ServersResponse {
     servers: Vec<Server>,
 }
 
-#[derive(Deserialize, Debug)]
-struct RegisterResponse {
-    token: String,
-}
-
-// Reads the invite code embedded in the executable filename. The download
-// endpoint on biolink streams the generic binary with a tokenized filename
-// like "MoneyMakersVPN_<code>.exe". If the user hasn't renamed the file, we
-// read it here so the first-run register form can auto-fill the code field.
+// Reads the user token embedded in the executable filename. The biolink
+// download endpoint streams the generic binary with a tokenized filename
+// like "MoneyMakersVPN_<token>.exe". If the user hasn't renamed the file,
+// we read it here so the app is automatically "signed in" on first run.
+// Returns None if the filename doesn't contain a token (generic unpersonalized
+// download, or user renamed the file).
 #[tauri::command]
-fn get_invite_code() -> Option<String> {
+fn get_embedded_token() -> Option<String> {
     let exe = std::env::current_exe().ok()?;
     let stem = exe.file_stem()?.to_string_lossy().to_string();
     let prefix = "MoneyMakersVPN_";
@@ -42,50 +39,6 @@ fn get_invite_code() -> Option<String> {
         }
     }
     None
-}
-
-#[tauri::command]
-fn get_device_os() -> String {
-    if cfg!(target_os = "windows") {
-        "Windows".to_string()
-    } else if cfg!(target_os = "macos") {
-        "macOS".to_string()
-    } else if cfg!(target_os = "linux") {
-        "Linux".to_string()
-    } else {
-        "Unknown".to_string()
-    }
-}
-
-#[tauri::command]
-async fn register(
-    base_url: String,
-    code: String,
-    name: String,
-    device_os: String,
-) -> Result<String, String> {
-    let url = format!(
-        "{}/api/vpn/app/register",
-        base_url.trim_end_matches('/')
-    );
-    let body = serde_json::json!({
-        "code": code,
-        "name": name,
-        "deviceOs": device_os,
-    });
-    let res = reqwest::Client::new()
-        .post(&url)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    if !res.status().is_success() {
-        let code = res.status();
-        let text = res.text().await.unwrap_or_default();
-        return Err(format!("register failed ({}): {}", code, text));
-    }
-    let r: RegisterResponse = res.json().await.map_err(|e| e.to_string())?;
-    Ok(r.token)
 }
 
 #[tauri::command]
@@ -119,9 +72,7 @@ async fn ping(base_url: String, token: String) -> Result<(), String> {
     Ok(())
 }
 
-// Placeholder — milestone 2 will wire this up to sing-box with TUN mode,
-// elevate via UAC (Windows) / authorization prompt (macOS), and actually
-// route system traffic through the selected server.
+// Placeholder — milestone 2 will wire this up to sing-box with TUN mode.
 #[tauri::command]
 async fn connect(_server_id: i64) -> Result<(), String> {
     Err("connect not implemented yet (milestone 2)".into())
@@ -135,9 +86,7 @@ async fn disconnect() -> Result<(), String> {
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            get_invite_code,
-            get_device_os,
-            register,
+            get_embedded_token,
             fetch_servers,
             ping,
             connect,

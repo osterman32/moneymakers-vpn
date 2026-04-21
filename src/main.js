@@ -1,7 +1,6 @@
 const { invoke } = window.__TAURI__.core;
 
 const BASE_URL = "https://moneymakers.inc";
-const TOKEN_KEY = "mm_vpn_token";
 
 function $(id) {
   return document.getElementById(id);
@@ -30,21 +29,6 @@ async function pingServer(token) {
   }
 }
 
-async function goMain(token) {
-  setStatus("loading…");
-  try {
-    const data = await fetchServers(token);
-    renderMain(data);
-    pingServer(token);
-    setStatus("");
-  } catch (e) {
-    // token invalid or server down; drop token and fall back to register
-    localStorage.removeItem(TOKEN_KEY);
-    setStatus("your access was revoked or the server is down: " + e, "error");
-    await startup();
-  }
-}
-
 function renderMain(data) {
   show("main");
   $("username").textContent = data.user.name;
@@ -68,50 +52,25 @@ function renderMain(data) {
 }
 
 async function startup() {
-  const saved = localStorage.getItem(TOKEN_KEY);
-  if (saved) {
-    return goMain(saved);
+  const token = await invoke("get_embedded_token").catch(() => null);
+  if (!token) {
+    show("needs-download");
+    return;
   }
-
-  // No saved token — registration. Pre-fill the code from the exe filename
-  // when we can; hide the code field when found so friends aren't confused.
-  const embeddedCode = await invoke("get_invite_code").catch(() => null);
-  if (embeddedCode) {
-    $("code-input").value = embeddedCode;
-    $("code-field").classList.add("hidden");
-  } else {
-    $("code-field").classList.remove("hidden");
-  }
-  show("register");
-  setStatus("");
-}
-
-$("register-btn").addEventListener("click", async () => {
-  const name = $("name-input").value.trim();
-  const code = $("code-input").value.trim();
-  if (!name) return setStatus("enter your name", "error");
-  if (!code) return setStatus("missing invite code — ask Zain", "error");
-  setStatus("joining…");
+  setStatus("loading…");
   try {
-    const deviceOs = await invoke("get_device_os");
-    const token = await invoke("register", {
-      baseUrl: BASE_URL,
-      code,
-      name,
-      deviceOs,
-    });
-    localStorage.setItem(TOKEN_KEY, token);
-    await goMain(token);
+    const data = await fetchServers(token);
+    renderMain(data);
+    pingServer(token);
+    setStatus("");
   } catch (e) {
-    setStatus(String(e), "error");
+    setStatus(
+      "couldn't reach the server or your access was revoked: " + e,
+      "error",
+    );
+    show("needs-download");
   }
-});
-
-$("reset-btn").addEventListener("click", () => {
-  if (!confirm("sign out? you'll have to re-join with the invite code.")) return;
-  localStorage.removeItem(TOKEN_KEY);
-  startup();
-});
+}
 
 $("connect-btn").addEventListener("click", async () => {
   const id = parseInt($("server-select").value, 10);
