@@ -112,20 +112,40 @@ fn build_singbox_config(ss_url: &str) -> Result<String, String> {
     let (method, password, host, port) = parse_ss_url(ss_url)?;
     let cfg = serde_json::json!({
         "log": { "level": "warn" },
+        "dns": {
+            "servers": [
+                { "tag": "remote", "address": "1.1.1.1", "detour": "proxy-out" },
+                { "tag": "local",  "address": "local" }
+            ],
+            "rules": [
+                { "outbound": ["any"], "server": "local" }
+            ],
+            "final": "remote"
+        },
         "inbounds": [{
             "type": "mixed",
             "tag": "proxy-in",
             "listen": "127.0.0.1",
-            "listen_port": 10808
+            "listen_port": 10808,
+            "sniff": true,
+            "sniff_override_destination": true
         }],
-        "outbounds": [{
-            "type": "shadowsocks",
-            "tag": "proxy-out",
-            "server": host,
-            "server_port": port,
-            "method": method,
-            "password": password
-        }]
+        "outbounds": [
+            {
+                "type": "shadowsocks",
+                "tag": "proxy-out",
+                "server": host,
+                "server_port": port,
+                "method": method,
+                "password": password
+            },
+            { "type": "direct", "tag": "direct" },
+            { "type": "block",  "tag": "block" }
+        ],
+        "route": {
+            "final": "proxy-out",
+            "auto_detect_interface": true
+        }
     });
     serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())
 }
@@ -200,6 +220,19 @@ fn set_system_proxy(enable: bool) -> Result<(), String> {
         }
         let out = Command::new("reg")
             .args([
+                "add", key, "/v", "ProxyOverride", "/t", "REG_SZ", "/d",
+                "<local>", "/f",
+            ])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            return Err(format!(
+                "reg ProxyOverride: {}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+        let out = Command::new("reg")
+            .args([
                 "add", key, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f",
             ])
             .output()
@@ -217,7 +250,32 @@ fn set_system_proxy(enable: bool) -> Result<(), String> {
             ])
             .output();
     }
+    notify_proxy_change();
     Ok(())
+}
+
+// Browsers (Chrome/Edge) cache proxy settings per-process. Changing the
+// registry silently doesn't get them to re-read — you have to broadcast
+// INTERNET_OPTION_SETTINGS_CHANGED + INTERNET_OPTION_REFRESH via wininet.
+#[cfg(target_os = "windows")]
+fn notify_proxy_change() {
+    use windows_sys::Win32::Networking::WinInet::{
+        InternetSetOptionW, INTERNET_OPTION_REFRESH, INTERNET_OPTION_SETTINGS_CHANGED,
+    };
+    unsafe {
+        InternetSetOptionW(
+            std::ptr::null_mut(),
+            INTERNET_OPTION_SETTINGS_CHANGED,
+            std::ptr::null_mut(),
+            0,
+        );
+        InternetSetOptionW(
+            std::ptr::null_mut(),
+            INTERNET_OPTION_REFRESH,
+            std::ptr::null_mut(),
+            0,
+        );
+    }
 }
 
 #[cfg(target_os = "macos")]
