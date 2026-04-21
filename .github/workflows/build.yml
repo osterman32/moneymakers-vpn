@@ -7,15 +7,15 @@ on:
 
 jobs:
   build:
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: macos-latest
-            target: universal-apple-darwin
             args: --target universal-apple-darwin
           - platform: windows-latest
-            target: ''
             args: ''
     runs-on: ${{ matrix.platform }}
     steps:
@@ -26,8 +26,10 @@ jobs:
           node-version: 20
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+
+      - name: Add Rust targets for universal macOS
+        if: matrix.platform == 'macos-latest'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -41,17 +43,9 @@ jobs:
         shell: bash
         run: |
           if [ ! -f src-tauri/icons/icon.ico ] || [ ! -f src-tauri/icons/icon.icns ]; then
-            echo "Generating placeholder icons from src-tauri/icons/source.png"
             if [ ! -f src-tauri/icons/source.png ]; then
-              # Create a solid-colour 1024x1024 PNG as a last-resort placeholder.
-              node -e "
-                const fs=require('fs');
-                const size=1024;
-                // minimal PNG encoder would be overkill; we rely on tauri icon
-                // to refuse anyway if missing — so just abort with a clear msg.
-                console.error('No src-tauri/icons/source.png found — drop a 1024x1024 PNG there and re-run.');
-                process.exit(1);
-              "
+              echo "Missing src-tauri/icons/source.png — commit a 1024x1024 PNG there." >&2
+              exit 1
             fi
             npx @tauri-apps/cli icon src-tauri/icons/source.png
           fi
@@ -63,7 +57,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'MoneyMakers VPN ${{ github.ref_name }}'
-          releaseBody: 'See the assets below to download for your platform.'
+          releaseBody: 'Download the asset for your platform.'
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
