@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MoneyMakers VPN</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header>
+        <h1>MoneyMakers VPN</h1>
+      </header>
+
+      <section id="register" class="view hidden">
+        <p class="hint">Enter your name to join the network.</p>
+        <label>
+          <span class="label">your name</span>
+          <input id="name-input" placeholder="e.g. Alex" autocomplete="off" />
+        </label>
+        <label id="code-field">
+          <span class="label">invite code</span>
+          <input id="code-input" placeholder="paste code here" autocomplete="off" spellcheck="false" />
+          <span class="sub-hint">
+            Usually filled in automatically. Only paste manually if Zain sent
+            you just a code.
+          </span>
+        </label>
+        <button id="register-btn" class="primary big">Join</button>
+      </section>
+
+      <section id="main" class="view hidden">
+        <p class="greeting">
+          hi <span id="username" class="accent"></span>
+        </p>
+        <label>
+          <span class="label">server</span>
+          <select id="server-select"></select>
+        </label>
+        <button id="connect-btn" class="primary big">Connect</button>
+        <button id="reset-btn" class="link">Sign out</button>
+      </section>
+
+      <div id="status" class="status"></div>
+    </div>
+    <script src="main.js"></script>
+  </body>
+</html>
