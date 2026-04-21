@@ -3,6 +3,9 @@ const { invoke } = window.__TAURI__.core;
 const BASE_URL = "https://moneymakers.inc";
 const TOKEN_KEY = "mm_vpn_token";
 
+let currentServers = [];
+let connected = false;
+
 function $(id) {
   return document.getElementById(id);
 }
@@ -32,10 +35,13 @@ async function pingServer(token) {
 
 function renderMain(data) {
   show("main");
+  currentServers = data.servers;
+  connected = false;
+  $("connect-btn").textContent = "Connect";
   $("username").textContent = data.user.name;
   const select = $("server-select");
   select.innerHTML = "";
-  if (!data.servers.length) {
+  if (!currentServers.length) {
     const opt = document.createElement("option");
     opt.textContent = "no servers available";
     opt.disabled = true;
@@ -43,7 +49,7 @@ function renderMain(data) {
     $("connect-btn").disabled = true;
     return;
   }
-  for (const s of data.servers) {
+  for (const s of currentServers) {
     const opt = document.createElement("option");
     opt.value = s.id;
     opt.textContent = s.name;
@@ -68,18 +74,15 @@ async function proceedWithToken(token) {
 }
 
 async function startup() {
-  // 1. filename-embedded token (portable exe path)
   const embedded = await invoke("get_embedded_token").catch(() => null);
   if (embedded) {
     if (await proceedWithToken(embedded)) return;
   }
-  // 2. previously-saved token (any prior successful sign-in)
   const saved = localStorage.getItem(TOKEN_KEY);
   if (saved) {
     if (await proceedWithToken(saved)) return;
     localStorage.removeItem(TOKEN_KEY);
   }
-  // 3. manual paste fallback
   show("paste-key");
   setStatus("");
 }
@@ -94,22 +97,44 @@ $("key-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") $("key-submit").click();
 });
 
-$("signout-btn").addEventListener("click", () => {
+$("signout-btn").addEventListener("click", async () => {
   if (!confirm("sign out on this device?")) return;
+  try {
+    if (connected) await invoke("disconnect");
+  } catch {}
   localStorage.removeItem(TOKEN_KEY);
+  connected = false;
   show("paste-key");
   $("key-input").value = "";
   setStatus("");
 });
 
 $("connect-btn").addEventListener("click", async () => {
+  if (connected) {
+    setStatus("disconnecting…");
+    try {
+      await invoke("disconnect");
+      connected = false;
+      $("connect-btn").textContent = "Connect";
+      $("server-select").disabled = false;
+      setStatus("disconnected");
+    } catch (e) {
+      setStatus("disconnect failed: " + e, "error");
+    }
+    return;
+  }
   const id = parseInt($("server-select").value, 10);
+  const server = currentServers.find((s) => s.id === id);
+  if (!server) return setStatus("pick a server", "error");
   setStatus("connecting…");
   try {
-    await invoke("connect", { serverId: id });
-    setStatus("connected", "ok");
+    await invoke("connect", { ssUrl: server.ssUrl });
+    connected = true;
+    $("connect-btn").textContent = "Disconnect";
+    $("server-select").disabled = true;
+    setStatus(`connected via ${server.name}`, "ok");
   } catch (e) {
-    setStatus(String(e), "error");
+    setStatus("connect failed: " + e, "error");
   }
 });
 

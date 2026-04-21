@@ -1,7 +1,12 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::sync::Mutex;
+use tauri::{Manager, State};
+use tauri_plugin_shell::{process::CommandChild, ShellExt};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct Server {
@@ -22,12 +27,12 @@ struct ServersResponse {
     servers: Vec<Server>,
 }
 
-// Reads the user token embedded in the executable filename. The biolink
-// download endpoint streams the generic binary with a tokenized filename
-// like "MoneyMakersVPN_<token>.exe". If the user hasn't renamed the file,
-// we read it here so the app is automatically "signed in" on first run.
-// Returns None if the filename doesn't contain a token (generic unpersonalized
-// download, or user renamed the file).
+// Holds the currently-running sing-box child so Disconnect can kill it.
+#[derive(Default)]
+struct ConnectionState {
+    child: Option<CommandChild>,
+}
+
 #[tauri::command]
 fn get_embedded_token() -> Option<String> {
     let exe = std::env::current_exe().ok()?;
@@ -72,19 +77,165 @@ async fn ping(base_url: String, token: String) -> Result<(), String> {
     Ok(())
 }
 
-// Placeholder — milestone 2 will wire this up to sing-box with TUN mode.
-#[tauri::command]
-async fn connect(_server_id: i64) -> Result<(), String> {
-    Err("connect not implemented yet (milestone 2)".into())
+// ss://BASE64(method:password)@host:port/?outline=1  or  BASE64URL, with/without padding
+fn parse_ss_url(url: &str) -> Result<(String, String, String, u16), String> {
+    let s = url.strip_prefix("ss://").ok_or("not an ss:// URL")?;
+    let s = s.split('#').next().unwrap();
+    let s = s.split('?').next().unwrap();
+    let s = s.trim_end_matches('/');
+    let (userinfo, hostport) = s.rsplit_once('@').ok_or("missing @ in ss:// URL")?;
+
+    let decoded = general_purpose::STANDARD
+        .decode(userinfo)
+        .or_else(|_| general_purpose::STANDARD_NO_PAD.decode(userinfo))
+        .or_else(|_| general_purpose::URL_SAFE.decode(userinfo))
+        .or_else(|_| general_purpose::URL_SAFE_NO_PAD.decode(userinfo))
+        .map_err(|e| format!("base64 decode: {}", e))?;
+    let decoded_str =
+        std::str::from_utf8(&decoded).map_err(|_| "invalid utf-8 in userinfo")?;
+    let (method, password) = decoded_str
+        .split_once(':')
+        .ok_or("no ':' in decoded userinfo")?;
+
+    let (host, port_str) = hostport.rsplit_once(':').ok_or("no ':' in hostport")?;
+    let port: u16 = port_str.parse().map_err(|_| "bad port number")?;
+
+    Ok((
+        method.to_string(),
+        password.to_string(),
+        host.to_string(),
+        port,
+    ))
+}
+
+fn build_singbox_config(ss_url: &str) -> Result<String, String> {
+    let (method, password, host, port) = parse_ss_url(ss_url)?;
+    let cfg = serde_json::json!({
+        "log": { "level": "warn" },
+        "inbounds": [{
+            "type": "mixed",
+            "tag": "proxy-in",
+            "listen": "127.0.0.1",
+            "listen_port": 10808
+        }],
+        "outbounds": [{
+            "type": "shadowsocks",
+            "tag": "proxy-out",
+            "server": host,
+            "server_port": port,
+            "method": method,
+            "password": password
+        }]
+    });
+    serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn disconnect() -> Result<(), String> {
-    Err("disconnect not implemented yet (milestone 2)".into())
+async fn connect(
+    app: tauri::AppHandle,
+    state: State<'_, Mutex<ConnectionState>>,
+    ss_url: String,
+) -> Result<(), String> {
+    // stop any existing connection
+    {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        if let Some(child) = guard.child.take() {
+            let _ = child.kill();
+        }
+    }
+
+    let config = build_singbox_config(&ss_url)?;
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
+    let config_path = config_dir.join("singbox.json");
+    fs::write(&config_path, &config).map_err(|e| e.to_string())?;
+
+    let cmd = app
+        .shell()
+        .sidecar("sing-box")
+        .map_err(|e| format!("sidecar lookup: {}", e))?
+        .args([
+            "run".to_string(),
+            "-c".to_string(),
+            config_path.to_string_lossy().to_string(),
+        ]);
+    let (_rx, child) = cmd.spawn().map_err(|e| format!("spawn sing-box: {}", e))?;
+
+    {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        guard.child = Some(child);
+    }
+
+    set_system_proxy(true).map_err(|e| format!("set proxy: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn disconnect(state: State<'_, Mutex<ConnectionState>>) -> Result<(), String> {
+    let _ = set_system_proxy(false);
+    let mut guard = state.lock().map_err(|e| e.to_string())?;
+    if let Some(child) = guard.child.take() {
+        let _ = child.kill();
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn set_system_proxy(enable: bool) -> Result<(), String> {
+    use std::process::Command;
+    let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings";
+    if enable {
+        let out = Command::new("reg")
+            .args([
+                "add", key, "/v", "ProxyServer", "/t", "REG_SZ", "/d",
+                "127.0.0.1:10808", "/f",
+            ])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            return Err(format!(
+                "reg ProxyServer: {}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+        let out = Command::new("reg")
+            .args([
+                "add", key, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f",
+            ])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            return Err(format!(
+                "reg ProxyEnable: {}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+    } else {
+        let _ = Command::new("reg")
+            .args([
+                "add", key, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "0", "/f",
+            ])
+            .output();
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn set_system_proxy(_enable: bool) -> Result<(), String> {
+    // TODO: wire up `networksetup -setsocksfirewallproxy` via osascript with admin.
+    // For now, surface an error instead of silently connecting with no routing.
+    Err("mac system-proxy support ships in a later build".into())
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn set_system_proxy(_enable: bool) -> Result<(), String> {
+    Err("system proxy not supported on this OS".into())
 }
 
 fn main() {
     tauri::Builder::default()
+        .manage(Mutex::new(ConnectionState::default()))
+        .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             get_embedded_token,
             fetch_servers,
