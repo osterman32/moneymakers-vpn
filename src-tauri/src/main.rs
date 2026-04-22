@@ -21,12 +21,6 @@ struct User {
     name: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct ServersResponse {
-    user: User,
-    servers: Vec<Server>,
-}
-
 // Holds the currently-running sing-box child so Disconnect can kill it.
 #[derive(Default)]
 struct ConnectionState {
@@ -46,35 +40,69 @@ fn get_embedded_token() -> Option<String> {
     None
 }
 
+// Returns the raw JSON the server sends, so the UI can branch on flags like
+// updateRequired, disabled, or updateAvailable without us having to model the
+// full payload up front.
 #[tauri::command]
-async fn fetch_servers(base_url: String, token: String) -> Result<ServersResponse, String> {
-    let url = format!(
+async fn fetch_servers(
+    base_url: String,
+    token: String,
+    version: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let mut url = format!(
         "{}/api/vpn/app/{}/servers",
         base_url.trim_end_matches('/'),
         token
     );
-    let res = reqwest::get(&url).await.map_err(|e| e.to_string())?;
-    if !res.status().is_success() {
-        return Err(format!("http {}", res.status()));
+    if let Some(v) = version.as_ref().filter(|s| !s.is_empty()) {
+        url.push_str(&format!("?version={}", urlencode(v)));
     }
-    res.json::<ServersResponse>()
-        .await
-        .map_err(|e| e.to_string())
+    let res = reqwest::get(&url).await.map_err(|e| e.to_string())?;
+    let status = res.status();
+    let body = res.json::<serde_json::Value>().await.map_err(|e| e.to_string())?;
+    // Server returns 403 for disabled accounts but with a useful body — surface
+    // it as Ok so the UI can render the disabled message instead of an error.
+    if !status.is_success() && status.as_u16() != 403 {
+        return Err(format!("http {}: {}", status, body));
+    }
+    Ok(body)
 }
 
 #[tauri::command]
-async fn ping(base_url: String, token: String) -> Result<(), String> {
-    let url = format!(
+async fn ping(
+    base_url: String,
+    token: String,
+    version: Option<String>,
+) -> Result<(), String> {
+    let mut url = format!(
         "{}/api/vpn/app/{}/ping",
         base_url.trim_end_matches('/'),
         token
     );
+    if let Some(v) = version.as_ref().filter(|s| !s.is_empty()) {
+        url.push_str(&format!("?version={}", urlencode(v)));
+    }
     let _ = reqwest::Client::new()
         .post(&url)
         .send()
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// Tiny percent-encoder for safe-set chars (versions are like "0.1.0"). Keeps
+// us off a url-encoding crate dep for one call site.
+fn urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
 }
 
 // ss://BASE64(method:password)@host:port/?outline=1  or  BASE64URL, with/without padding

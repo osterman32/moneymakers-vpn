@@ -1,10 +1,15 @@
 const { invoke } = window.__TAURI__.core;
+const { open: openExternal } = window.__TAURI__.shell || {};
 
+const APP_VERSION = "0.1.0";
 const BASE_URL = "https://moneymakers.inc";
 const TOKEN_KEY = "mm_vpn_token";
+const PING_INTERVAL_MS = 60_000;
 
 let currentServers = [];
 let connected = false;
+let pingTimer = null;
+let blocked = false;
 
 function $(id) {
   return document.getElementById(id);
@@ -22,23 +27,73 @@ function show(id) {
 }
 
 async function fetchServers(token) {
-  return invoke("fetch_servers", { baseUrl: BASE_URL, token });
+  return invoke("fetch_servers", {
+    baseUrl: BASE_URL,
+    token,
+    version: APP_VERSION,
+  });
 }
 
 async function pingServer(token) {
   try {
-    await invoke("ping", { baseUrl: BASE_URL, token });
+    await invoke("ping", { baseUrl: BASE_URL, token, version: APP_VERSION });
   } catch {
     // best-effort heartbeat
   }
 }
 
+function startPinging(token) {
+  stopPinging();
+  pingTimer = setInterval(() => pingServer(token), PING_INTERVAL_MS);
+}
+
+function stopPinging() {
+  if (pingTimer) {
+    clearInterval(pingTimer);
+    pingTimer = null;
+  }
+}
+
+function showBlocker(title, message, downloadUrl) {
+  blocked = true;
+  stopPinging();
+  $("blocker-title").textContent = title;
+  $("blocker-message").textContent = message;
+  const btn = $("blocker-action");
+  if (downloadUrl) {
+    btn.classList.remove("hidden");
+    btn.textContent = "Open download page";
+    btn.onclick = () => {
+      if (openExternal) {
+        openExternal(downloadUrl).catch(() => {});
+      } else {
+        // Fallback for older Tauri shell plugin layouts.
+        window.open(downloadUrl, "_blank");
+      }
+    };
+  } else {
+    btn.classList.add("hidden");
+  }
+  $("blocker").classList.remove("hidden");
+}
+
+function showUpdateBanner(latestVersion) {
+  const bar = $("update-banner");
+  bar.textContent = `New version v${latestVersion} is available — open moneymakers.inc to download.`;
+  bar.classList.remove("hidden");
+}
+
+function hideUpdateBanner() {
+  $("update-banner").classList.add("hidden");
+}
+
 function renderMain(data) {
   show("main");
-  currentServers = data.servers;
+  hideUpdateBanner();
+  currentServers = data.servers || [];
   connected = false;
   $("connect-btn").textContent = "Connect";
-  $("username").textContent = data.user.name;
+  $("username").textContent = data.user?.name || "";
   const select = $("server-select");
   select.innerHTML = "";
   if (!currentServers.length) {
@@ -56,15 +111,48 @@ function renderMain(data) {
     select.appendChild(opt);
   }
   $("connect-btn").disabled = false;
+  if (data.updateAvailable && data.latestVersion) {
+    showUpdateBanner(data.latestVersion);
+  }
+}
+
+// Returns true if the response was handled as a blocker (disabled / update
+// required) and the caller should NOT proceed to renderMain.
+function handleBlockingResponse(data) {
+  if (data?.disabled) {
+    showBlocker(
+      "Account suspended",
+      data.message || "Your account has been suspended. Contact the admin.",
+      null,
+    );
+    return true;
+  }
+  if (data?.updateRequired) {
+    showBlocker(
+      "Update required",
+      data.message || "A newer version is required.",
+      data.downloadUrl || "https://moneymakers.inc/",
+    );
+    return true;
+  }
+  return false;
 }
 
 async function proceedWithToken(token) {
   setStatus("loading…");
   try {
     const data = await fetchServers(token);
+    if (handleBlockingResponse(data)) {
+      // Save the token so a future launch (after they update / contact admin)
+      // doesn't lose them — they can still re-attempt sign-in.
+      localStorage.setItem(TOKEN_KEY, token);
+      setStatus("");
+      return false;
+    }
     localStorage.setItem(TOKEN_KEY, token);
     renderMain(data);
     pingServer(token);
+    startPinging(token);
     setStatus("");
     return true;
   } catch (e) {
@@ -77,10 +165,12 @@ async function startup() {
   const embedded = await invoke("get_embedded_token").catch(() => null);
   if (embedded) {
     if (await proceedWithToken(embedded)) return;
+    if (blocked) return;
   }
   const saved = localStorage.getItem(TOKEN_KEY);
   if (saved) {
     if (await proceedWithToken(saved)) return;
+    if (blocked) return;
     localStorage.removeItem(TOKEN_KEY);
   }
   show("paste-key");
@@ -99,6 +189,7 @@ $("key-input").addEventListener("keydown", (e) => {
 
 $("signout-btn").addEventListener("click", async () => {
   if (!confirm("sign out on this device?")) return;
+  stopPinging();
   try {
     if (connected) await invoke("disconnect");
   } catch {}

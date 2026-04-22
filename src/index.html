@@ -43,6 +43,7 @@
         <p class="greeting">
           signed in as <span id="username" class="accent"></span>
         </p>
+        <div id="update-banner" class="banner hidden"></div>
         <label>
           <span class="label">server</span>
           <select id="server-select"></select>
@@ -55,6 +56,15 @@
 
       <div id="status" class="status"></div>
     </div>
+
+    <div id="blocker" class="blocker hidden">
+      <div class="blocker-card">
+        <h2 id="blocker-title"></h2>
+        <p id="blocker-message"></p>
+        <button id="blocker-action" class="primary big hidden"></button>
+      </div>
+    </div>
+
     <script src="main.js"></script>
   </body>
 </html>
