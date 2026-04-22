@@ -138,11 +138,21 @@ fn parse_ss_url(url: &str) -> Result<(String, String, String, u16), String> {
 
 fn build_singbox_config(ss_url: &str, log_path: &str) -> Result<String, String> {
     let (method, password, host, port) = parse_ss_url(ss_url)?;
+    // DNS over HTTPS through the proxy: when a SOCKS5h client sends a hostname,
+    // sing-box resolves it via 1.1.1.1 over the SS tunnel instead of the
+    // system resolver (which is the school's DNS on the target laptops).
+    // 1.1.1.1 is dialed by IP, so no chicken-and-egg lookup is needed.
     let cfg = serde_json::json!({
         "log": {
             "level": "info",
             "output": log_path,
             "timestamp": true
+        },
+        "dns": {
+            "servers": [
+                { "tag": "remote", "address": "https://1.1.1.1/dns-query", "detour": "proxy-out" }
+            ],
+            "final": "remote"
         },
         "inbounds": [{
             "type": "mixed",
@@ -396,6 +406,8 @@ fn main() {
     tauri::Builder::default()
         .manage(Mutex::new(ConnectionState::default()))
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             get_embedded_token,
             fetch_servers,

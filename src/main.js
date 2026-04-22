@@ -1,7 +1,9 @@
 const { invoke } = window.__TAURI__.core;
 const { open: openExternal } = window.__TAURI__.shell || {};
+const updater = window.__TAURI__.updater || {};
+const proc = window.__TAURI__.process || {};
 
-const APP_VERSION = "0.1.0";
+const APP_VERSION = "0.1.1";
 const BASE_URL = "https://moneymakers.inc";
 const TOKEN_KEY = "mm_vpn_token";
 const PING_INTERVAL_MS = 60_000;
@@ -161,7 +163,31 @@ async function proceedWithToken(token) {
   }
 }
 
+async function maybeAutoUpdate() {
+  if (!updater.check) return; // updater plugin not available (dev mode etc.)
+  let update;
+  try {
+    update = await updater.check();
+  } catch {
+    return; // offline, GitHub down, signature mismatch, etc. — ignore
+  }
+  if (!update?.available) return;
+  const ok = confirm(
+    `A new version (${update.version}) is available.\n\n` +
+      `Current: ${APP_VERSION}\nDownloading and installing will restart the app.\n\nUpdate now?`,
+  );
+  if (!ok) return;
+  setStatus("downloading update…");
+  try {
+    await update.downloadAndInstall();
+    if (proc.relaunch) await proc.relaunch();
+  } catch (e) {
+    setStatus("update failed: " + e, "error");
+  }
+}
+
 async function startup() {
+  await maybeAutoUpdate();
   const embedded = await invoke("get_embedded_token").catch(() => null);
   if (embedded) {
     if (await proceedWithToken(embedded)) return;
