@@ -3,7 +3,7 @@ const { open: openExternal } = window.__TAURI__.shell || {};
 const updater = window.__TAURI__.updater || {};
 const proc = window.__TAURI__.process || {};
 
-const APP_VERSION = "0.1.1";
+const APP_VERSION = "0.2.0";
 const BASE_URL = "https://moneymakers.inc";
 const TOKEN_KEY = "mm_vpn_token";
 const PING_INTERVAL_MS = 60_000;
@@ -12,6 +12,7 @@ let currentServers = [];
 let connected = false;
 let pingTimer = null;
 let blocked = false;
+const IS_MAC = /mac/i.test(navigator.platform || "") || /mac/i.test(navigator.userAgent || "");
 
 function $(id) {
   return document.getElementById(id);
@@ -89,12 +90,20 @@ function hideUpdateBanner() {
   $("update-banner").classList.add("hidden");
 }
 
+function setConnectHintVisible(visible) {
+  const el = $("connect-hint");
+  if (!el) return;
+  if (IS_MAC && visible) el.classList.remove("hidden");
+  else el.classList.add("hidden");
+}
+
 function renderMain(data) {
   show("main");
   hideUpdateBanner();
   currentServers = data.servers || [];
   connected = false;
   $("connect-btn").textContent = "Connect";
+  setConnectHintVisible(true);
   $("username").textContent = data.user?.name || "";
   const select = $("server-select");
   select.innerHTML = "";
@@ -250,6 +259,7 @@ $("connect-btn").addEventListener("click", async () => {
       connected = false;
       $("connect-btn").textContent = "Connect";
       $("server-select").disabled = false;
+      setConnectHintVisible(true);
       setStatus("disconnected");
     } catch (e) {
       setStatus("disconnect failed: " + e, "error");
@@ -259,12 +269,13 @@ $("connect-btn").addEventListener("click", async () => {
   const id = parseInt($("server-select").value, 10);
   const server = currentServers.find((s) => s.id === id);
   if (!server) return setStatus("pick a server", "error");
-  setStatus("connecting…");
+  setStatus(IS_MAC ? "connecting… (approve the password prompt)" : "connecting…");
   try {
     await invoke("connect", { ssUrl: server.ssUrl });
     connected = true;
     $("connect-btn").textContent = "Disconnect";
     $("server-select").disabled = true;
+    setConnectHintVisible(false);
     setStatus(`connected via ${server.name}`, "ok");
   } catch (e) {
     setStatus("connect failed: " + e, "error");
