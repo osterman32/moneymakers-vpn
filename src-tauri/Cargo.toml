@@ -1,6 +1,6 @@
 [package]
 name = "moneymakers-vpn"
-version = "0.2.0"
+version = "0.2.1"
 description = "MoneyMakers VPN"
 authors = ["Zain"]
 edition = "2021"

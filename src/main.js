@@ -3,7 +3,7 @@ const { open: openExternal } = window.__TAURI__.shell || {};
 const updater = window.__TAURI__.updater || {};
 const proc = window.__TAURI__.process || {};
 
-const APP_VERSION = "0.2.0";
+const APP_VERSION = "0.2.1";
 const BASE_URL = "https://moneymakers.inc";
 const TOKEN_KEY = "mm_vpn_token";
 const PING_INTERVAL_MS = 60_000;
