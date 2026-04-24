@@ -629,10 +629,9 @@ fn main() {
             if let tauri::WindowEvent::CloseRequested { .. } = _event {
                 let state: tauri::State<'_, Mutex<ConnectionState>> = _window.state();
                 let _ = set_system_proxy(false);
-                if let Ok(mut g) = state.lock() {
-                    if let Some(child) = g.child.take() {
-                        let _ = child.kill();
-                    }
+                let child_opt = state.lock().ok().and_then(|mut g| g.child.take());
+                if let Some(child) = child_opt {
+                    let _ = child.kill();
                 }
             }
         })
