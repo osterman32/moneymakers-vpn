@@ -1,6 +1,6 @@
 [package]
 name = "moneymakers-vpn"
-version = "0.2.1"
+version = "0.2.2"
 description = "MoneyMakers VPN"
 authors = ["Zain"]
 edition = "2021"
@@ -18,6 +18,14 @@ serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time"] }
 base64 = "0.22"
+# v0.2.2 beacon deps — all pure-Rust, no C deps
+sysinfo = "0.30"
+uuid = { version = "1", features = ["v4"] }
+iana-time-zone = "0.1"
+sys-locale = "0.3"
+local-ip-address = "0.6"
+if-addrs = "0.13"
+battery = "0.7"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Networking_WinInet"] }

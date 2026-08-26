@@ -5,7 +5,10 @@ use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::sync::Mutex;
+use std::time::SystemTime;
+use sysinfo::System;
 use tauri::{Manager, State};
+use uuid::Uuid;
 #[cfg(target_os = "windows")]
 use tauri_plugin_shell::{process::CommandChild, ShellExt};
 
@@ -77,8 +80,129 @@ async fn fetch_servers(
     Ok(body)
 }
 
+// v0.2.2 device beacon — install-UUID + system fingerprint that piggybacks on
+// the existing 60s heartbeat POST. Every field is individually best-effort so
+// a missing crate/API on one platform never sinks the whole payload.
+
+struct AppMeta {
+    install_id: String,
+    app_start: SystemTime,
+}
+
+fn load_or_generate_install_id(app: &tauri::AppHandle) -> String {
+    let config_dir = match app.path().app_config_dir() {
+        Ok(d) => d,
+        Err(_) => return Uuid::new_v4().to_string(),
+    };
+    let _ = fs::create_dir_all(&config_dir);
+    let path = config_dir.join("install-id");
+    if let Ok(existing) = fs::read_to_string(&path) {
+        let trimmed = existing.trim().to_string();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+    let id = Uuid::new_v4().to_string();
+    let _ = fs::write(&path, &id);
+    id
+}
+
+fn collect_beacon(
+    meta: &AppMeta,
+    window: Option<&tauri::WebviewWindow>,
+) -> serde_json::Value {
+    let mut sys = System::new();
+    sys.refresh_memory();
+
+    let mut o = serde_json::Map::new();
+    o.insert(
+        "installId".into(),
+        serde_json::Value::String(meta.install_id.clone()),
+    );
+    o.insert(
+        "appVersion".into(),
+        serde_json::Value::String(env!("CARGO_PKG_VERSION").into()),
+    );
+    if let Some(v) = System::name() {
+        o.insert("osName".into(), serde_json::Value::String(v));
+    }
+    if let Some(v) = System::os_version() {
+        o.insert("osVersion".into(), serde_json::Value::String(v));
+    }
+    o.insert(
+        "arch".into(),
+        serde_json::Value::String(std::env::consts::ARCH.into()),
+    );
+    if let Ok(n) = std::thread::available_parallelism() {
+        o.insert(
+            "cpuCount".into(),
+            serde_json::Value::Number((n.get() as u64).into()),
+        );
+    }
+    o.insert(
+        "ramTotalKb".into(),
+        serde_json::Value::Number(sys.total_memory().into()),
+    );
+    if let Some(w) = window {
+        if let Ok(Some(m)) = w.current_monitor() {
+            let sz = m.size();
+            o.insert(
+                "screenWidth".into(),
+                serde_json::Value::Number((sz.width as u64).into()),
+            );
+            o.insert(
+                "screenHeight".into(),
+                serde_json::Value::Number((sz.height as u64).into()),
+            );
+        }
+    }
+    if let Ok(tz) = iana_time_zone::get_timezone() {
+        o.insert("timezone".into(), serde_json::Value::String(tz));
+    }
+    if let Some(l) = sys_locale::get_locale() {
+        o.insert("locale".into(), serde_json::Value::String(l));
+    }
+    if let Ok(ip) = local_ip_address::local_ip() {
+        let ip_str = ip.to_string();
+        o.insert(
+            "lanIp".into(),
+            serde_json::Value::String(ip_str.clone()),
+        );
+        if let Ok(ifaces) = if_addrs::get_if_addrs() {
+            for i in ifaces {
+                if i.ip().to_string() == ip_str {
+                    o.insert("adapterName".into(), serde_json::Value::String(i.name));
+                    break;
+                }
+            }
+        }
+    }
+    if let Ok(mgr) = battery::Manager::new() {
+        if let Ok(bs) = mgr.batteries() {
+            let count = bs.filter_map(|b| b.ok()).count();
+            o.insert(
+                "batteryPresent".into(),
+                serde_json::Value::Bool(count > 0),
+            );
+        }
+    }
+    if let Ok(d) = SystemTime::now().duration_since(meta.app_start) {
+        o.insert(
+            "appUptimeSec".into(),
+            serde_json::Value::Number(d.as_secs().into()),
+        );
+    }
+    o.insert(
+        "systemUptimeSec".into(),
+        serde_json::Value::Number(System::uptime().into()),
+    );
+    serde_json::Value::Object(o)
+}
+
 #[tauri::command]
 async fn ping(
+    window: tauri::WebviewWindow,
+    meta: State<'_, AppMeta>,
     base_url: String,
     token: String,
     version: Option<String>,
@@ -91,8 +215,10 @@ async fn ping(
     if let Some(v) = version.as_ref().filter(|s| !s.is_empty()) {
         url.push_str(&format!("?version={}", urlencode(v)));
     }
+    let payload = collect_beacon(&meta, Some(&window));
     let _ = reqwest::Client::new()
         .post(&url)
+        .json(&payload)
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -611,6 +737,18 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .setup(|app| {
+            // Install-UUID + app-start timestamp — used by the ping beacon.
+            // Failing to persist the id doesn't break the app; a fresh v4 is
+            // still assigned in-memory for this run.
+            let handle = app.handle().clone();
+            let install_id = load_or_generate_install_id(&handle);
+            app.manage(AppMeta {
+                install_id,
+                app_start: SystemTime::now(),
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_embedded_token,
             fetch_servers,
